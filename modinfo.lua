@@ -1,0 +1,13 @@
+name = "UM Stone Fruit Winter Growable Fix"
+description = "Server-side compatibility patch for Uncompromising Mode. Prevents rock avocado bushes from running unsafe growable catch-up while UM's No Winter Growing option is active."
+author = "Codex"
+version = "1.1.1"
+forumthread = ""
+api_version = 10
+dst_compatible = true
+all_clients_require_mod = false
+client_only_mod = false
+server_only_mod = true
+icon_atlas = ""
+icon = ""
+configuration_options = {}
