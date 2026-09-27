@@ -1,0 +1,146 @@
+[h1]永不妥协-冬季不生长补丁[/h1]
+[b]这是旧版永不妥协 UM（workshop-2039181790）的服务端外挂补丁。[/b]
+这个补丁的核心思路是：只修 2039181790 版 UM 对石果灌木冬季生长状态处理不完整导致的死循环风险，不改变石果在非冬季的正常生长逻辑。
+[h2]补丁逻辑[/h2]
+永不妥协 2039181790 的问题点在于，石果灌木同时有 pickable 和 growable。
+UM 的冬季不生长逻辑优先处理了 pickable，但没有完整暂停 growable，同时又拦截了 growable:StartGrowing() / Resume()。于是某些石果在冬天加载时可能出现：
+[code]
+pickable 已暂停
+growable 仍认为自己在生长
+targettime 落在当前时间之前
+OnEntityWake -> LongUpdate 补算 -> DoGrowth -> SetStage -> pickable.Regen
+[/code]
+这个链条在异常状态下会反复补算，造成单分片 CPU 100%。
+[h2]为什么会像死循环[/h2]
+代码上，LongUpdate 的退出条件大概是：
+[code]
+while dt > 0 and inst:IsValid() and IsGrowing() do
+    DoGrowth(true)
+end
+[/code]
+它能结束需要至少满足一个：
+[list]
+[*]dt 被正常消耗到 0
+[*]实体失效
+[*]IsGrowing() 变 false
+[/list]
+正常原版会靠第一个结束：每次生长阶段都会消耗一段时间，dt 越来越小。
+这次的问题是，在 UM + 冬季石果这个状态下，很可能出现了：
+[list]
+[*]IsGrowing() 一直为 true
+[*]dt 没有有效减少，或者减少极慢
+[*]阶段又因为 loopstages 反复循环
+[/list]
+所以从服务器表现上看，它就像死循环。
+[h2]旧版 UM 的关键问题[/h2]
+2039181790 版 UM 这段冬季不生长逻辑把 StartGrowing() 拦掉了，但没有同步处理 targettime。
+UM 代码位置：
+[code]
+/2039181790/init/init_food/init_rare_foods.lua
+[/code]
+关键逻辑是：
+[code]
+function self:StartGrowing(time)
+    if (self.inst:HasTag("bananabush") or self.inst.prefab == "rock_avocado_bush")
+        and GLOBAL.TheWorld.state.iswinter then
+        return false
+    else
+        return _OldStartGrowing(self, time)
+    end
+end
+[/code]
+也就是说冬天时，石果调用 growable:StartGrowing() 会直接 return false，不会执行原版的 _OldStartGrowing()。
+原版 StartGrowing() 本来会做两件重要事情：
+[list]
+[*]StopGrowing() 清掉旧的 targettime
+[*]StartGrowingTask(time) 设置新的未来 targettime
+[/list]
+但 UM 在冬天提前返回了，所以这两步都没发生。于是测试档里的异常石果旧 targettime 会一直留着。
+[h2]为什么过期 targettime 特别危险[/h2]
+测试中有一株异常石果状态类似：
+[code]
+唤醒时当前时间 = 367.9
+旧 targettime = 90
+timeleft = 90 - 367.9 = -277.9
+[/code]
+growable.LongUpdate 里会做：
+[code]
+dt = dt - timeleft
+[/code]
+因为 timeleft 是负数，实际变成：
+[code]
+dt = dt + 277.9
+[/code]
+所以 dt 不但没有消耗，反而越算越大。
+然后每轮 DoGrowth() 想进入下一阶段，并调用 StartGrowing() 重新安排时间，但 UM 又把 StartGrowing() 拦掉，targettime 继续保持 90。
+所以核心原因是：
+[code]
+targettime 已经过期 + UM 冬天阻止 StartGrowing + growable 没有真正 Pause
+[/code]
+其他石果没卡，通常是因为它们的 targettime 多数还大于当前时间，比如 855、957、1777、2724。即使 StartGrowing() 被拦，它们的 timeleft 还是正数，dt 最终能被消耗完。
+异常石果的 targettime 已经落在当前时间之前，所以进入了无限循环。
+[h2]重现方式[/h2]
+[list=1]
+[*]新世界秋天先去一次月岛，让石果加载
+[*]不要采光 / 清理石果
+[*]离开月岛，让月岛石果离开加载范围
+[*]其他人在地面继续玩到冬天，至少过 5-6 天
+[*]冬天再回月岛
+[/list]
+这个流程可以自然制造：
+[code]
+石果在非冬季设置了未来 targettime
+玩家离开后石果睡眠 / 卸载
+分片时间继续推进
+冬天时当前 GetTime() 超过旧 targettime
+玩家回到加载范围，石果 OnEntityWake / LongUpdate 补算
+旧版 UM 拦截 StartGrowing，异常链条可能开始
+[/code]
+[h2]这个外挂补丁做了三件事[/h2]
+[h3]1. 冬天进入安全暂停[/h3]
+对 rock_avocado_bush 的 growable 主动停止任务，清理 targettime / sleeptime / remaining 这类补算入口，并打上独立暂停原因：
+[code]
+um_rock_avocado_winter
+[/code]
+[h3]2. 阻断冬天异常补算[/h3]
+在冬天且 UM 开启“冬季不生长”时，OnEntityWake / LongUpdate / DoGrowth / StartGrowing / Resume 等入口都会先把石果压回安全暂停状态，避免进入旧版的补算链。
+[h3]3. 春天恢复正常[/h3]
+非冬季时清掉 um_rock_avocado_winter，重新启动正常 StartGrowingTask。
+测试里已经看到春天恢复后：
+[code]
+reasons=empty
+is_growing=true
+task=PERIODIC
+[/code]
+[h2]和测试版永不妥协 3193922031 的区别[/h2]
+测试版永不妥协 3193922031 的做法更像是：把石果灌木从 UM 的冬季不生长特殊处理里排除出去。
+也就是说，石果不再走那套有问题的 UM 冬季暂停逻辑，因此不会触发旧版的卡死链路。
+这个补丁做法是：保留 UM“冬季不生长”对石果的语义，但把 growable / pickable 状态修正为一致。
+区别可以这样理解：
+[code]
+3193922031：绕开石果的冬季限制，避免踩坑
+本补丁：仍让石果冬天停长，但修正停长 / 恢复过程
+[/code]
+[h2]优势[/h2]
+这个补丁的优势主要是兼容旧版玩法预期：
+[list]
+[*]适合继续使用 2039181790 旧版 UM
+[*]只影响 rock_avocado_bush
+[*]只在 UM 的“冬季不生长”配置开启时介入
+[*]冬天阻断异常补算，避免 CPU 100%
+[*]春天恢复原本生长，不影响春夏秋正常逻辑
+[*]不需要改 UM 本体，作为服务端外挂补丁启用即可
+[/list]
+简单说，测试版永不妥协 3193922031 是“避开问题逻辑”，这个补丁是“把旧版问题逻辑修到状态一致”。
+[h2]正式服启用方式[/h2]
+正式服务器只需要启用：
+[code]
+workshop-2039181790  永不妥协 UM 旧版正式分支
+workshop-3770333015  永不妥协-冬季不生长补丁
+[/code]
+[b]不需要启用跟踪 / trace / debug mod。[/b]
+建议第一次上线前备份存档，然后重启 Master 和 Caves。
+[h2]English Summary[/h2]
+Server-side compatibility patch for old Uncompromising Mode workshop-2039181790.
+This patch only fixes the rock_avocado_bush winter growable-state dead-loop risk caused by incomplete No Winter Growing handling in old UM. It does not change normal stone fruit growth outside winter.
+The patch keeps UM's intended no-winter-growth behavior for stone fruit, but makes the growable / pickable state consistent and safe.

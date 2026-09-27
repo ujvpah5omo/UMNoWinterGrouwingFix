@@ -1,5 +1,7 @@
-name = "UM Stone Fruit Winter Growable Fix"
-description = [[Server-side compatibility patch for the official Uncompromising Mode release (workshop-2039181790).
+name = "永不妥协-冬季不生长补丁"
+description = [[永不妥协 UM 旧版正式分支（workshop-2039181790）的服务端兼容补丁，用于修复开启 no_winter_growing_ 后，冬季石果灌木 rock_avocado_bush 的 growable 状态可能进入 LongUpdate 死循环并导致服务器 CPU 100% 卡死的问题。
+
+Server-side compatibility patch for the official Uncompromising Mode release (workshop-2039181790).
 
 This patch only fixes the CPU-freeze risk caused by incomplete winter growth-state handling for rock avocado bushes. It does not change normal rock avocado growth outside winter.
 

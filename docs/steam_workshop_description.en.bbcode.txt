@@ -1,0 +1,145 @@
+[h1]Uncompromising Mode - No Winter Growing Fix[/h1]
+[b]Server-side compatibility patch for the old Uncompromising Mode release, workshop-2039181790.[/b]
+The core idea of this patch is narrow: it only fixes the dead-loop risk caused by incomplete winter growth-state handling for rock avocado bushes in UM 2039181790. It does not change normal rock avocado growth outside winter.
+[h2]Patch Logic[/h2]
+The problem in Uncompromising Mode 2039181790 is that rock avocado bushes have both pickable and growable components.
+UM's No Winter Growing logic handles the pickable side first, but does not fully pause the growable side. At the same time, it blocks growable:StartGrowing() / Resume(). As a result, some rock avocado bushes can enter this state when loaded in winter:
+[code]
+pickable is paused
+growable still thinks it is growing
+targettime is already earlier than the current shard time
+OnEntityWake -> LongUpdate catch-up -> DoGrowth -> SetStage -> pickable.Regen
+[/code]
+In the bad state, that chain can repeat over and over and push a single shard to 100% CPU.
+[h2]Why It Looks Like A Dead Loop[/h2]
+The relevant LongUpdate loop is roughly:
+[code]
+while dt > 0 and inst:IsValid() and IsGrowing() do
+    DoGrowth(true)
+end
+[/code]
+It can finish only if at least one of these becomes true:
+[list]
+[*]dt is consumed down to 0
+[*]the entity becomes invalid
+[*]IsGrowing() becomes false
+[/list]
+In normal vanilla behavior, the first condition ends the loop: each growth stage consumes some time, so dt keeps getting smaller.
+In the old UM + winter rock avocado state, however, the following can happen:
+[list]
+[*]IsGrowing() stays true
+[*]dt is not effectively reduced, or is reduced extremely slowly
+[*]stages can cycle again because of loopstages
+[/list]
+From the server's point of view, it behaves like a dead loop.
+[h2]The Key Issue In Old UM[/h2]
+UM 2039181790 blocks StartGrowing() during winter, but does not synchronize targettime.
+UM file:
+[code]
+/2039181790/init/init_food/init_rare_foods.lua
+[/code]
+The important logic is roughly:
+[code]
+function self:StartGrowing(time)
+    if (self.inst:HasTag("bananabush") or self.inst.prefab == "rock_avocado_bush")
+        and GLOBAL.TheWorld.state.iswinter then
+        return false
+    else
+        return _OldStartGrowing(self, time)
+    end
+end
+[/code]
+This means that, in winter, growable:StartGrowing() on a rock avocado bush returns false immediately. It never reaches the original _OldStartGrowing().
+The original StartGrowing() normally does two important things:
+[list]
+[*]StopGrowing() clears the old targettime
+[*]StartGrowingTask(time) schedules a new future targettime
+[/list]
+Because UM returns early in winter, neither of those happens. The stale targettime can remain on the bush.
+[h2]Why An Expired targettime Is Dangerous[/h2]
+One bad test bush had a state like this:
+[code]
+current time when woken = 367.9
+old targettime = 90
+timeleft = 90 - 367.9 = -277.9
+[/code]
+growable.LongUpdate does something like:
+[code]
+dt = dt - timeleft
+[/code]
+Because timeleft is negative, this effectively becomes:
+[code]
+dt = dt + 277.9
+[/code]
+So dt is not consumed. It grows larger instead.
+Each DoGrowth() pass then tries to enter the next stage and call StartGrowing() to schedule new growth time. But UM blocks StartGrowing() again in winter, so targettime remains 90.
+The core cause is:
+[code]
+expired targettime + UM blocks StartGrowing in winter + growable was never truly paused
+[/code]
+Other rock avocado bushes usually do not freeze because their targettime is still later than the current time, such as 855, 957, 1777, or 2724. Even if StartGrowing() is blocked, their timeleft is still positive, so dt can eventually be consumed.
+The problematic bush already had targettime earlier than current time, so it entered the infinite catch-up path.
+[h2]Reproduction Flow[/h2]
+[list=1]
+[*]In a new world, visit Moon Island once in autumn so the rock avocado bushes load.
+[*]Do not harvest or clear the bushes.
+[*]Leave Moon Island so the bushes leave the active loading range.
+[*]Let other players keep playing on the surface until winter, for at least 5-6 days.
+[*]Return to Moon Island in winter.
+[/list]
+This naturally creates the risky state:
+[code]
+rock avocado bushes set future targettime outside winter
+the player leaves and the bushes sleep / unload
+the shard time keeps advancing
+in winter, current GetTime() passes the old targettime
+the player returns and wakes the bushes
+OnEntityWake / LongUpdate tries to catch up
+old UM blocks StartGrowing and the bad chain may begin
+[/code]
+[h2]What This Patch Does[/h2]
+This external patch does three things.
+[h3]1. Enter A Safe Winter Pause[/h3]
+For rock_avocado_bush growable, the patch proactively stops the growable task, clears catch-up fields such as targettime / sleeptime / remaining, and adds its own pause reason:
+[code]
+um_rock_avocado_winter
+[/code]
+[h3]2. Block Unsafe Winter Catch-Up[/h3]
+When it is winter and UM's No Winter Growing option is enabled, OnEntityWake / LongUpdate / DoGrowth / StartGrowing / Resume first force the bush back into the safe paused state. This prevents the old catch-up chain from starting.
+[h3]3. Restore Normal Growth After Winter[/h3]
+Outside winter, the patch clears um_rock_avocado_winter and restarts normal StartGrowingTask-based growth.
+Testing confirmed the spring recovery state:
+[code]
+reasons=empty
+is_growing=true
+task=PERIODIC
+[/code]
+[h2]Difference From UM Testing Branch 3193922031[/h2]
+The UM testing branch, workshop-3193922031, appears to solve this more by excluding rock avocado bushes from UM's special winter no-growth handling.
+In other words, rock avocado bushes no longer enter the problematic UM winter pause path, so the old freeze chain is avoided.
+This patch keeps UM's "no winter growing" meaning for rock avocado bushes, but fixes the growable / pickable state so both sides are consistent.
+You can think of the difference like this:
+[code]
+3193922031: avoids the rock avocado winter restriction path
+this patch: keeps rock avocado winter no-growth, but fixes pause / resume state
+[/code]
+[h2]Advantages[/h2]
+This patch is mainly useful for servers that want to keep the old 2039181790 UM behavior:
+[list]
+[*]Works for servers continuing to use old UM 2039181790
+[*]Only affects rock_avocado_bush
+[*]Only intervenes when UM's No Winter Growing option is enabled
+[*]Blocks unsafe winter catch-up and prevents 100% CPU freeze
+[*]Restores normal growth after winter
+[*]Does not affect normal spring / summer / autumn growth
+[*]Does not require editing UM itself; just enable it as a server-side patch mod
+[/list]
+In short: UM testing branch 3193922031 avoids the problematic path. This patch keeps the old gameplay intent and repairs the state handling.
+[h2]Live Server Setup[/h2]
+For a live server, enable only:
+[code]
+workshop-2039181790  old Uncompromising Mode release
+workshop-3770333015  Uncompromising Mode - No Winter Growing Fix
+[/code]
+[b]Do not enable any trace / debug mod on a live server.[/b]
+Back up your save before first deployment, then restart both Master and Caves.
