@@ -61,7 +61,7 @@ Steam: https://steamcommunity.com/sharedfiles/filedetails/?id=3770333015
 ]])
 
 author = "Codex"
-version = "1.2.0"
+version = "1.2.1"
 forumthread = WORKSHOP_URL
 
 api_version = 10
@@ -79,8 +79,8 @@ all_clients_require_mod = false
 client_only_mod = false
 server_only_mod = true
 
-icon_atlas = ""
-icon = ""
+icon_atlas = "modicon.xml"
+icon = "modicon.tex"
 
 mod_dependencies = {
     { workshop = UM_WORKSHOP_ID },
