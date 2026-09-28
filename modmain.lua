@@ -2,6 +2,11 @@ GLOBAL.setmetatable(env, { __index = function(_, key) return GLOBAL.rawget(GLOBA
 
 local ROCK_AVOCADO_PREFAB = "rock_avocado_bush"
 local WINTER_PAUSE_SOURCE = "um_rock_avocado_winter"
+local PATCH_ENABLED = GetModConfigData("patch_enabled") ~= false
+
+if not PATCH_ENABLED then
+    return
+end
 
 local UM_MOD_NAMES = {
     "workshop-2039181790",
