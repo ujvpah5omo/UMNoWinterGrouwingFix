@@ -61,7 +61,7 @@ Steam: https://steamcommunity.com/sharedfiles/filedetails/?id=3770333015
 ]])
 
 author = "Codex"
-version = "1.2.2"
+version = "1.2.3"
 forumthread = WORKSHOP_URL
 
 api_version = 10
@@ -95,6 +95,19 @@ server_filter_tags = {
 }
 
 configuration_options = {
+    {
+        name = "winter_crops_grow",
+        label = T("冬季作物冬季生长", "Allow Winter Crops to Grow"),
+        hover = T(
+            "允许原版冬季适种的农田作物在冬季生长，需启用本补丁。",
+            "Allow farm crops that prefer winter in vanilla to grow in winter. Requires the patch to be enabled."
+        ),
+        options = {
+            { description = T("启用", "Enabled"), data = true },
+            { description = T("禁用", "Disabled"), data = false },
+        },
+        default = false,
+    },
     {
         name = "patch_enabled",
         label = T("启用补丁", "Enable Patch"),

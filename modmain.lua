@@ -57,6 +57,40 @@ local function GetNoWinterGrowingConfig()
     return false
 end
 
+if GetModConfigData("winter_crops_grow") == true then
+    AddPrefabPostInit("world", function(world)
+        if not world.ismastersim or not GetNoWinterGrowingConfig() then
+            return
+        end
+
+        local plant_defs = GLOBAL.require("prefabs/farm_plant_defs").PLANT_DEFS
+        local growable_class = GLOBAL.require("components/growable")
+        local winter_crops = {}
+        -- UM removes winter from these four vanilla season tables.
+        for _, crop in ipairs({ "potato", "carrot", "pumpkin", "asparagus" }) do
+            plant_defs[crop].good_seasons.winter = true
+        end
+        for _, def in pairs(plant_defs) do
+            if def.good_seasons ~= nil and def.good_seasons.winter then
+                winter_crops[def.prefab] = true
+            end
+        end
+
+        local old_make_no_grow = GLOBAL.MakeNoGrowInWinter
+        GLOBAL.MakeNoGrowInWinter = function(inst, ...)
+            if not winter_crops[inst.prefab] then
+                return old_make_no_grow(inst, ...)
+            end
+
+            local growable = inst.components.growable
+            if growable ~= nil then
+                -- Use vanilla Resume so light and other pause reasons still work.
+                growable.Resume = growable_class.Resume
+            end
+        end
+    end)
+end
+
 local function GetSeason()
     local world = GetWorld()
     if world == nil then
