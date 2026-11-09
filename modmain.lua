@@ -8,6 +8,22 @@ if not PATCH_ENABLED then
     return
 end
 
+AddPrefabPostInit("ancienttree_nightvision_sapling", function(inst)
+    local growable = inst.components.growable
+    if growable == nil then
+        return
+    end
+
+    local old_resume = growable.Resume
+    function growable:Resume(reason, ...)
+        -- UM's winter wrapper drops the reason before calling vanilla Resume.
+        if reason ~= nil and self.pausereasons ~= nil then
+            self.pausereasons[reason] = nil
+        end
+        return old_resume(self, reason, ...)
+    end
+end)
+
 local UM_MOD_NAMES = {
     "workshop-2039181790",
     "workshop-3193922031",

@@ -61,7 +61,7 @@ Steam: https://steamcommunity.com/sharedfiles/filedetails/?id=3770333015
 ]])
 
 author = "Codex"
-version = "1.2.1"
+version = "1.2.2"
 forumthread = WORKSHOP_URL
 
 api_version = 10
